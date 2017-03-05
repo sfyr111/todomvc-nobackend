@@ -1,8 +1,12 @@
 // The Vue build version to load with the `import` command
 // (runtime-only or standalone) has been set in webpack.base.conf with an alias.
 import Vue from 'vue'
+import AV from 'leancloud-storage'
+import 'bootstrap/dist/css/bootstrap.css'
 import 'todomvc-app-css/index.css'
 import 'animate.css'
+import './todo.css'
+
 // Vue.config.productionTip = false
 
 /* eslint-disable no-new */
@@ -13,11 +17,25 @@ import 'animate.css'
 //   components: { App }
 // })
 
+
+/**
+ * @https://leancloud.cn/docs/leanstorage_guide-js.html
+ * @数据存储开发指南-javascript
+ */
+
+/**
+ * @init leancloud
+ */
+const APP_ID = 'oaXyyBa5kIwqVMIOtqgHdNO5-gzGzoHsz';
+const APP_KEY = 'w2G7z7u0A4ltDvBYfx8vn9fW';
+AV.init({
+  appId: APP_ID,
+  appKey: APP_KEY
+});
+
 /**
  * @todumvc
  */
-
-
 let filters = {
  all(todos) {
   return todos
@@ -34,19 +52,17 @@ let filters = {
 let vm = new Vue({
  el: '.todoapp',
  data: {
+  message: 'todos',
   newTodo: '',
-  todos: [
-   {
-    content: 'thing',
-    completed: false
-   },
-   {
-    content: 'todo',
-    completed: false
-   }
-  ],
+  todos: [],
   editedTodo: null,
-  hashName: 'all'
+  hashName: 'all',
+  activeType: 'login',
+  formData: {
+    username: '',
+    password: ''
+  },
+  currentUser: null
  },
  computed: {
   remain() { // 剩余的数量，也就是active状态的
@@ -74,9 +90,11 @@ let vm = new Vue({
     completed: false
    })
    this.newTodo = ''
+   this.saveOrUpdateTodos()
   },
   removeTodo(index) {
    this.todos.splice(index, 1)
+   this.saveOrUpdateTodos()
   },
   editTodo(todo) {
    // 缓存编辑项，取消编辑时使用
@@ -92,13 +110,108 @@ let vm = new Vue({
    if(!todo.content) {
     this.removeTodo(index)
    }
+   this.saveOrUpdateTodos()
   },
   editCancle(todo) {
    todo.content = this.editCache
    this.editedTodo = null
   },
   clear() {
-   this.todos = filters.active(this.todos)
+  // this.todos = filters.active(this.todos)
+  // 为了能和后台数据交互，不能单纯的只过滤，还要操作
+   for(let i = 0; i < this.todos.length; i++) {
+     if(this.todos[i].completed) {
+       this.todos.splice(i, 1)
+       i --
+     }
+   }
+   this.saveOrUpdateTodos()
+  },
+  // 注册
+  signUp() {
+    let user = new AV.User()
+    user.setUsername(this.formData.username)
+    user.setPassword(this.formData.password)
+    user.signUp()
+    .then(loginedUser => {
+      console.log(loginedUser)
+      this.currentUser = this.getCurrentUser()
+    },
+    error => {
+      alert(error)
+    })
+  },
+  login() {
+    AV.User.logIn(this.formData.username,this.formData.password)
+    .then(loginedUser => {
+      console.log(loginedUser)
+      this.currentUser = this.getCurrentUser()
+      this.fetchTodos() // 登录成功后读取 todos
+    },
+    error => {
+      alert(error)
+    })
+  },
+  getCurrentUser() {
+    let current = AV.User.current()
+    if(current) {
+      let { id, createdAt, attributes: username } = current
+      this.message = username.username
+      return { id, createdAt, username }
+    } else {
+      return null
+    }
+  },
+  logout() { //登出
+    AV.User.logOut()
+    this.currentUser = null
+    this.message = 'todos'
+    window.location.reload()
+  },
+  saveTodos() {
+    let dataString = JSON.stringify(this.todos)
+    let AVTodos = AV.Object.extend('AllTodos') // 声明一个AVTodos类,这个AllTodos可以在network里看到
+    let avTodos = new AVTodos() // 新建一个todo对象
+    let acl = new AV.ACL()
+    acl.setReadAccess(AV.User.current(),true) // 只有这个 user 能读
+    acl.setWriteAccess(AV.User.current(),true) // 只有这个 user 能写
+
+    avTodos.set('content', dataString)
+    avTodos.setACL(acl) // 设置访问控制
+    avTodos.save()
+           .then( todo => { 
+             this.todos.id = todo.id  // 一定要记得把 id 挂到 this.todoList 上，否则下次就不会调用 updateTodos 了
+             console.log('保存成功') 
+            }, error => { console.log('保存失败') } )
+  },
+  updateTodos() {
+    // 想要知道如何更新对象，先看文档 https://leancloud.cn/docs/leanstorage_guide-js.html#更新对象
+    let dataString = JSON.stringify(this.todos) // JSON 在序列化这个有 id 的数组的时候，会得出怎样的结果？
+    // console.log(dataString)
+    let avTodos = AV.Object.createWithoutData('AllTodos', this.todos.id)
+    avTodos.set('content', dataString)
+    avTodos.save().then(() => console.log('更新成功'))
+  },
+  saveOrUpdateTodos() {
+    if(this.todos.id) {
+      this.updateTodos()
+    } else {
+      this.saveTodos()
+    }
+  },
+  fetchTodos() {
+   if(this.currentUser){
+     let query = new AV.Query('AllTodos')
+     query.find().then(todos => { 
+       let avAllTodos = todos[0] // 因为理论上 AllTodos 只有一个，所以我们取结果的第一项
+       let id = avAllTodos.id 
+       this.todos = JSON.parse(avAllTodos.attributes.content) // 为什么有个 attributes？因为我从控制台看到的
+       this.todos.id = id // 为什么给 todoList 这个数组设置 id？因为数组也是对象啊
+      }, error => { console.log(error) })
+   }
+  },
+  con() {
+    console.log(this.filteredTodos.id)
   }
  },
  directives: {
@@ -107,15 +220,16 @@ let vm = new Vue({
   }
  },
  created() {
-   // 窗口未关闭前保存数据
+   // 窗口未关闭前保存正在编辑的数据
    window.onbeforeunload = () => {
-     let dataString = JSON.stringify(this.todos)
-     window.localStorage.setItem('myTodos', dataString)
+     let inputTodo = this.newTodo
+     window.localStorage.setItem('textTodo', inputTodo)
    }
-   // 创建实例时提取数据
-   let oldDataString = window.localStorage.getItem('myTodos')
-   let oldData = JSON.parse(oldDataString)
-   this.todos = oldData || []
+   this.newTodo = window.localStorage.getItem('textTodo') || ''
+   // 创建实例时读取当前用户
+   this.currentUser = this.getCurrentUser()
+  
+   this.fetchTodos()
  }
 })
 
@@ -131,3 +245,4 @@ window.addEventListener('hashchange', function() {
     vm.hashName = 'all'
   }
 })
+
