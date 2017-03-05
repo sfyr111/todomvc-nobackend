@@ -166,7 +166,7 @@ let vm = new Vue({
     AV.User.logOut()
     this.currentUser = null
     this.message = 'todos'
-    window.location.reload()
+    // window.location.reload()
   },
   saveTodos() {
     let dataString = JSON.stringify(this.todos)
